@@ -48,6 +48,7 @@ class GinexDataset():
 
         split_idx = torch.load(split_idx_path)
         self.train_idx = split_idx['train']
+        self.train_idx = self.train_idx[torch.randperm(self.train_idx.numel())[:self.train_idx.numel() // 10]]
         self.val_idx = split_idx['valid']
         self.test_idx = split_idx['test']
 

@@ -6,6 +6,8 @@ import torch_sparse
 from torch_sparse import SparseTensor
 import torch.multiprocessing as mp
 from lib.cpp_extension.wrapper import sample
+from torch.utils.data import DataLoader
+import time
 
 
 def sample_adj_ginex(rowptr, col, subset, num_neighbors, replace, cache_data=None, address_table=None):
@@ -38,7 +40,7 @@ class Adj(NamedTuple):
         return Adj(adj_t, e_id, self.size)
 
 
-class GinexNeighborSampler(torch.utils.data.DataLoader):
+class GinexNeighborSampler(DataLoader):
     '''
     Neighbor sampler of Ginex. We modified NeighborSampler class of PyG.
 
@@ -95,6 +97,7 @@ class GinexNeighborSampler(torch.utils.data.DataLoader):
 
 
     def sample(self, batch):
+        tic = time.time()
         if not isinstance(batch, Tensor):
             batch = torch.tensor(batch)
 
@@ -122,6 +125,8 @@ class GinexNeighborSampler(torch.utils.data.DataLoader):
 
         torch.save(n_id, n_id_filename)
         torch.save(adjs, adjs_filename)
+        
+        return time.time() - tic
 
 
     def __repr__(self):
