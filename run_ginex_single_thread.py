@@ -31,7 +31,7 @@ argparser.add_argument("--sb-size", type=int, default="1000")
 argparser.add_argument("--feature-cache-size", type=float, default=500000000)
 argparser.add_argument("--trace-load-num-threads", type=int, default=4)
 argparser.add_argument("--neigh-cache-size", type=int, default=45000000000)
-argparser.add_argument("--ginex-num-threads", type=int, default=os.cpu_count() * 8)
+argparser.add_argument("--ginex-num-threads", type=int, default=64)
 argparser.add_argument("--verbose", dest="verbose", default=True, action="store_true")
 argparser.add_argument(
     "--train-only", dest="train_only", default=False, action="store_true"
@@ -266,15 +266,6 @@ def delete_trace(i):
 
 
 def execute(i, cache, pbar, total_loss, total_correct, last, mode="train"):
-    # drop_cache_time = 0
-    # feat_load_time = 0
-    # graph_load_time = 0
-    # cache_update_time = 0
-    # train_time = 0
-    # free_time = 0
-    # graph_transfer_time, feat_transfer_time = 0, 0
-    # input_feat_size = 0
-    # input_node_num = 0
     decompose_recorder = [0] * 10
 
     if last:
@@ -527,9 +518,10 @@ if __name__ == "__main__":
             epoch_info_recoder[i].append(record)
         if epoch > 0:
             epoch_info_recoder[0][-1] = epoch_info_recoder[0][0]
-        epoch_info_recoder[-1].append(np.sum([record[-1] for record in epoch_info_recoder[:-1]]))
+        epoch_total_time = np.sum([record[-1] for record in epoch_info_recoder[:-1]])
+        epoch_info_recoder[-1].append(epoch_total_time)
         for i, record in enumerate(sample_decompose):
-            if record == 0:
+            if record == 0 and epoch != 0:
                 epoch_sample_decompose[i].append(epoch_sample_decompose[i][-1])
             else:
                 epoch_sample_decompose[i].append(record)
