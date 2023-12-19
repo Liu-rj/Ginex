@@ -37,20 +37,20 @@ args = argparser.parse_args()
 # features = dataset[0].x
 # labels = dataset[0].y
 
-root = './dataset'
+root = '/nvme1n1/ginex_dataset'
 os.makedirs(root, exist_ok=True)
 dataset_path = os.path.join(root, args.dataset + '-ginex')
 
 if args.dataset.startswith("ogbn"):
-    dataset = load_ogb(args.dataset, "/nvme1n1/dataset")
+    dataset = load_ogb(args.dataset, "/efs/rjliu/dataset")
 elif args.dataset.startswith("igb"):
     dataset = load_igb(args)
 elif args.dataset == "mag240m":
-    dataset = load_mag240m("/home/ubuntu/mag", only_graph=False)
+    dataset = load_mag240m("/efs/rjliu/dataset/mag240m", only_graph=False)
     label_offset = dataset[-1]
     dataset = dataset[:-1]
 elif args.dataset == "friendster":
-    dataset = load_dglgraph("/nvme1n1/dataset/friendster/friendster.bin", 128, 20)
+    dataset = load_dglgraph("/efs/rjliu/dataset/friendster/friendster.bin", 128, 20)
 else:
     raise NotImplementedError
 

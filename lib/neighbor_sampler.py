@@ -10,21 +10,36 @@ from torch.utils.data import DataLoader
 import time
 
 
-def sample_adj_ginex(rowptr, col, subset, num_neighbors, replace, cache_data=None, address_table=None):
-    rowptr, col, n_id, indptr = sample.sample_adj_ginex(                                                   
-        rowptr, col, subset, cache_data, address_table, num_neighbors, replace)                                 
-    out = SparseTensor(rowptr=rowptr, row=None, col=col,                                                 
-                       sparse_sizes=(subset.size(0), n_id.size(0)),                                      
-                       is_sorted=True)                                                                   
-    return out, n_id                                                                                     
+def sample_adj_ginex(
+    rowptr, col, subset, num_neighbors, replace, cache_data=None, address_table=None
+):
+    rowptr, col, n_id, indptr = sample.sample_adj_ginex(
+        rowptr, col, subset, cache_data, address_table, num_neighbors, replace
+    )
+    out = SparseTensor(
+        rowptr=rowptr,
+        row=None,
+        col=col,
+        sparse_sizes=(subset.size(0), n_id.size(0)),
+        is_sorted=True,
+    )
+    return out, n_id
 
 
-def sample_adj_mmap(rowptr, col, subset: torch.Tensor, num_neighbors: int, replace: bool = False):
-    rowptr, col, n_id, e_id = torch.ops.torch_sparse.sample_adj(                                         
-    rowptr, col, subset, num_neighbors, replace)                                                         
-    out = SparseTensor(rowptr=rowptr, row=None, col=col, value=None,                                     
-                       sparse_sizes=(subset.size(0), n_id.size(0)),                                      
-                       is_sorted=True)
+def sample_adj_mmap(
+    rowptr, col, subset: torch.Tensor, num_neighbors: int, replace: bool = False
+):
+    rowptr, col, n_id, e_id = torch.ops.torch_sparse.sample_adj(
+        rowptr, col, subset, num_neighbors, replace
+    )
+    out = SparseTensor(
+        rowptr=rowptr,
+        row=None,
+        col=col,
+        value=None,
+        sparse_sizes=(subset.size(0), n_id.size(0)),
+        is_sorted=True,
+    )
     return out, n_id
 
 
@@ -33,7 +48,6 @@ class Adj(NamedTuple):
     e_id: Optional[Tensor]
     size: Tuple[int, int]
 
-
     def to(self, *args, **kwargs):
         adj_t = self.adj_t.to(*args, **kwargs)
         e_id = self.e_id.to(*args, **kwargs) if self.e_id is not None else None
@@ -41,7 +55,7 @@ class Adj(NamedTuple):
 
 
 class GinexNeighborSampler(DataLoader):
-    '''
+    """
     Neighbor sampler of Ginex. We modified NeighborSampler class of PyG.
 
     Args:
@@ -50,28 +64,37 @@ class GinexNeighborSampler(DataLoader):
         exp_name (str): the name of the experiments used to designate the path of the
             runtime trace files.
         sb (int): the superbatch number.
-        sizes ([int]): The number of neighbors to sample for each node in each layer. 
+        sizes ([int]): The number of neighbors to sample for each node in each layer.
             If set to sizes[l] = -1`, all neighbors are included in layer `l`.
         node_idx (Tensor): The nodes that should be considered for creating mini-batches.
         cache_data (Tensor): the data array of the neighbor cache.
         address_table (Tensor): the address table of the neighbor cache.
         num_nodes (int): the number of nodes in the graph.
-        transform (callable, optional): A function/transform that takes in a sampled 
-            mini-batch and returns a transformed version. (default: None) 
+        transform (callable, optional): A function/transform that takes in a sampled
+            mini-batch and returns a transformed version. (default: None)
         **kwargs (optional): Additional arguments of
             `torch.utils.data.DataLoader`, such as `batch_size`,
             `shuffle`, `drop_last`m `num_workers`.
-    '''
-    def __init__(self, indptr, indices, exp_name, sb,
-                 sizes: List[int], node_idx: Tensor,
-                 cache_data = None, address_table = None,
-                 num_nodes: Optional[int] = None,
-                 transform: Callable = None, **kwargs):
+    """
 
-        if 'collate_fn' in kwargs:
-            del kwargs['collate_fn']
-        if 'dataset' in kwargs:
-            del kwargs['dataset']
+    def __init__(
+        self,
+        indptr,
+        indices,
+        exp_name,
+        sb,
+        sizes: List[int],
+        node_idx: Tensor,
+        cache_data=None,
+        address_table=None,
+        num_nodes: Optional[int] = None,
+        transform: Callable = None,
+        **kwargs
+    ):
+        if "collate_fn" in kwargs:
+            del kwargs["collate_fn"]
+        if "dataset" in kwargs:
+            del kwargs["dataset"]
 
         self.indptr = indptr
         self.indices = indices
@@ -91,10 +114,10 @@ class GinexNeighborSampler(DataLoader):
 
         self.batch_count = torch.zeros(1, dtype=torch.int).share_memory_()
         self.lock = mp.Lock()
-    
-        super(GinexNeighborSampler, self).__init__(
-            node_idx.view(-1).tolist(), collate_fn=self.sample, **kwargs)
 
+        super(GinexNeighborSampler, self).__init__(
+            node_idx.view(-1).tolist(), collate_fn=self.sample, **kwargs
+        )
 
     def sample(self, batch):
         tic = time.time()
@@ -106,8 +129,16 @@ class GinexNeighborSampler(DataLoader):
         adjs = []
         n_id = batch
         for size in self.sizes:
-            adj_t, n_id = sample_adj_ginex(self.indptr, self.indices, n_id, size, False, self.cache_data, self.address_table)
-            
+            adj_t, n_id = sample_adj_ginex(
+                self.indptr,
+                self.indices,
+                n_id,
+                size,
+                False,
+                self.cache_data,
+                self.address_table,
+            )
+
             e_id = adj_t.storage.value()
             size = adj_t.sparse_sizes()[::-1]
             adjs.append(Adj(adj_t, e_id, size))
@@ -115,50 +146,66 @@ class GinexNeighborSampler(DataLoader):
         adjs = adjs[0] if len(adjs) == 1 else adjs[::-1]
         out = (batch_size, n_id, adjs)
         out = self.transform(*out) if self.transform is not None else out
-        
+
         self.lock.acquire()
         batch_count = self.batch_count.item()
-        n_id_filename = os.path.join('./trace', self.exp_name, 'sb_' + str(self.sb) + '_ids_' + str(self.batch_count.item()) + '.pth')
-        adjs_filename = os.path.join('./trace', self.exp_name, 'sb_' + str(self.sb) + '_adjs_' + str(self.batch_count.item()) + '.pth')
+        n_id_filename = os.path.join(
+            "/nvme1n1/ginex_dataset/trace",
+            self.exp_name,
+            "sb_" + str(self.sb) + "_ids_" + str(self.batch_count.item()) + ".pth",
+        )
+        adjs_filename = os.path.join(
+            "/nvme1n1/ginex_dataset/trace",
+            self.exp_name,
+            "sb_" + str(self.sb) + "_adjs_" + str(self.batch_count.item()) + ".pth",
+        )
         self.batch_count += 1
         self.lock.release()
 
         torch.save(n_id, n_id_filename)
         torch.save(adjs, adjs_filename)
-        
+
         return time.time() - tic
 
-
     def __repr__(self):
-        return '{}(sizes={})'.format(self.__class__.__name__, self.sizes)
+        return "{}(sizes={})".format(self.__class__.__name__, self.sizes)
+
+    def __len__(self):
+        return (self.node_idx.numel() + self.batch_size - 1) // self.batch_size
 
 
 class MMAPNeighborSampler(torch.utils.data.DataLoader):
-    '''
+    """
     Sampler for the baseline. We modified NeighborSampler class of PyG.
 
     Args:
         indptr (Tensor): the indptr tensor.
         indices (Tensor): the (memory-mapped) indices tensor.
-        sizes ([int]): The number of neighbors to sample for each node in each layer. 
+        sizes ([int]): The number of neighbors to sample for each node in each layer.
             If set to sizes[l] = -1`, all neighbors are included in layer `l`.
         node_idx (Tensor): The nodes that should be considered for creating mini-batches.
         num_nodes (int): the number of nodes in the graph.
-        transform (callable, optional): A function/transform that takes in a sampled 
-            mini-batch and returns a transformed version. (default: None) 
+        transform (callable, optional): A function/transform that takes in a sampled
+            mini-batch and returns a transformed version. (default: None)
         **kwargs (optional): Additional arguments of
             `torch.utils.data.DataLoader`, such as `batch_size`,
             `shuffle`, `drop_last`m `num_workers`.
-    '''
-    def __init__(self, indptr, indices,
-                 sizes: List[int], node_idx: Tensor,
-                 num_nodes: Optional[int] = None, 
-                 transform: Callable = None, **kwargs):
+    """
 
-        if 'collate_fn' in kwargs:
-            del kwargs['collate_fn']
-        if 'dataset' in kwargs:
-            del kwargs['dataset']
+    def __init__(
+        self,
+        indptr,
+        indices,
+        sizes: List[int],
+        node_idx: Tensor,
+        num_nodes: Optional[int] = None,
+        transform: Callable = None,
+        **kwargs
+    ):
+        if "collate_fn" in kwargs:
+            del kwargs["collate_fn"]
+        if "dataset" in kwargs:
+            del kwargs["dataset"]
 
         self.indptr = indptr
         self.indices = indices
@@ -172,8 +219,8 @@ class MMAPNeighborSampler(torch.utils.data.DataLoader):
             node_idx = node_idx.nonzero(as_tuple=False).view(-1)
 
         super(MMAPNeighborSampler, self).__init__(
-            node_idx.view(-1).tolist(), collate_fn=self.sample, **kwargs)
-
+            node_idx.view(-1).tolist(), collate_fn=self.sample, **kwargs
+        )
 
     def sample(self, batch):
         if not isinstance(batch, Tensor):
@@ -195,6 +242,5 @@ class MMAPNeighborSampler(torch.utils.data.DataLoader):
         out = self.transform(*out) if self.transform is not None else out
         return out
 
-
     def __repr__(self):
-        return '{}(sizes={})'.format(self.__class__.__name__, self.sizes)
+        return "{}(sizes={})".format(self.__class__.__name__, self.sizes)

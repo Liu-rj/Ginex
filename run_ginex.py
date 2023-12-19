@@ -20,7 +20,7 @@ from lib.neighbor_sampler import GinexNeighborSampler
 argparser = argparse.ArgumentParser()
 argparser.add_argument("--gpu", type=int, default=0)
 argparser.add_argument("--num-epochs", type=int, default=3)
-argparser.add_argument("--batch-size", type=int, default=1000)
+argparser.add_argument("--batch-size", type=int, default=1024)
 argparser.add_argument("--num-workers", type=int, default=os.cpu_count() * 2)
 argparser.add_argument("--num-hiddens", type=int, default=256)
 argparser.add_argument("--dataset", type=str, default="ogbn-papers100M")
@@ -32,7 +32,9 @@ argparser.add_argument("--trace-load-num-threads", type=int, default=4)
 argparser.add_argument("--neigh-cache-size", type=int, default=45000000000)
 argparser.add_argument("--ginex-num-threads", type=int, default=os.cpu_count() * 8)
 argparser.add_argument("--verbose", dest="verbose", default=False, action="store_true")
-argparser.add_argument("--train-only", dest="train_only", default=False, action="store_true")
+argparser.add_argument(
+    "--train-only", dest="train_only", default=False, action="store_true"
+)
 args = argparser.parse_args()
 print(args)
 
@@ -95,10 +97,26 @@ def inspect(i, last, mode="train"):
         torch.cuda.synchronize()
         tic = time.time()
         effective_sb_size = (
-            int((node_idx.numel() % (args.sb_size * args.batch_size) + args.batch_size - 1) / args.batch_size) if last else args.sb_size
+            int(
+                (
+                    node_idx.numel() % (args.sb_size * args.batch_size)
+                    + args.batch_size
+                    - 1
+                )
+                / args.batch_size
+            )
+            if last
+            else args.sb_size
         )
         cache = FeatureCache(
-            args.feature_cache_size, effective_sb_size, num_nodes, mmapped_features, num_features, args.exp_name, i - 1, args.verbose
+            args.feature_cache_size,
+            effective_sb_size,
+            num_nodes,
+            mmapped_features,
+            num_features,
+            args.exp_name,
+            i - 1,
+            args.verbose,
         )
         # Pass 1 and 2 are executed before starting sb sample.
         # We overlap only the pass 3 of changeset precomputation,
@@ -130,14 +148,30 @@ def inspect(i, last, mode="train"):
 
     # Load neighbor cache
     tic = time.time()
-    neighbor_cache_path = str(dataset_path) + "/nc" + "_size_" + str(args.neigh_cache_size) + ".dat"
-    neighbor_cache_conf_path = str(dataset_path) + "/nc" + "_size_" + str(args.neigh_cache_size) + "_conf.json"
+    neighbor_cache_path = (
+        str(dataset_path) + "/nc" + "_size_" + str(args.neigh_cache_size) + ".dat"
+    )
+    neighbor_cache_conf_path = (
+        str(dataset_path) + "/nc" + "_size_" + str(args.neigh_cache_size) + "_conf.json"
+    )
     neighbor_cache_numel = json.load(open(neighbor_cache_conf_path, "r"))["shape"][0]
-    neighbor_cachetable_path = str(dataset_path) + "/nctbl" + "_size_" + str(args.neigh_cache_size) + ".dat"
-    neighbor_cachetable_conf_path = str(dataset_path) + "/nctbl" + "_size_" + str(args.neigh_cache_size) + "_conf.json"
-    neighbor_cachetable_numel = json.load(open(neighbor_cachetable_conf_path, "r"))["shape"][0]
+    neighbor_cachetable_path = (
+        str(dataset_path) + "/nctbl" + "_size_" + str(args.neigh_cache_size) + ".dat"
+    )
+    neighbor_cachetable_conf_path = (
+        str(dataset_path)
+        + "/nctbl"
+        + "_size_"
+        + str(args.neigh_cache_size)
+        + "_conf.json"
+    )
+    neighbor_cachetable_numel = json.load(open(neighbor_cachetable_conf_path, "r"))[
+        "shape"
+    ][0]
     neighbor_cache = load_int64(neighbor_cache_path, neighbor_cache_numel)
-    neighbor_cachetable = load_int64(neighbor_cachetable_path, neighbor_cachetable_numel)
+    neighbor_cachetable = load_int64(
+        neighbor_cachetable_path, neighbor_cachetable_numel
+    )
     load_cache = time.time() - tic
 
     start_idx = i * args.batch_size * args.sb_size
@@ -162,10 +196,10 @@ def inspect(i, last, mode="train"):
         sampling += time.time() - tic
         inner_sampling_time += duration
 
-        tic = time.time()
-        with open("/proc/sys/vm/drop_caches", "w") as stream:
-            stream.write("1\n")
-        drop_cache_time += time.time() - tic
+        # tic = time.time()
+        # with open("/proc/sys/vm/drop_caches", "w") as stream:
+        #     stream.write("1\n")
+        # drop_cache_time += time.time() - tic
 
         if i != 0 and step == 0:
             torch.cuda.synchronize()
@@ -203,9 +237,36 @@ def trace_load(q, indices, sb):
     for i in indices:
         q.put(
             (
-                torch.load("./trace/" + args.exp_name + "/" + "sb_" + str(sb) + "_ids_" + str(i) + ".pth"),
-                torch.load("./trace/" + args.exp_name + "/" + "sb_" + str(sb) + "_adjs_" + str(i) + ".pth"),
-                torch.load("./trace/" + args.exp_name + "/" + "sb_" + str(sb) + "_update_" + str(i) + ".pth"),
+                torch.load(
+                    "./trace/"
+                    + args.exp_name
+                    + "/"
+                    + "sb_"
+                    + str(sb)
+                    + "_ids_"
+                    + str(i)
+                    + ".pth"
+                ),
+                torch.load(
+                    "./trace/"
+                    + args.exp_name
+                    + "/"
+                    + "sb_"
+                    + str(sb)
+                    + "_adjs_"
+                    + str(i)
+                    + ".pth"
+                ),
+                torch.load(
+                    "./trace/"
+                    + args.exp_name
+                    + "/"
+                    + "sb_"
+                    + str(sb)
+                    + "_update_"
+                    + str(i)
+                    + ".pth"
+                ),
             )
         )
 
@@ -217,9 +278,15 @@ def gather(gather_q, n_id, cache, batch_size):
 
 
 def delete_trace(i):
-    n_id_filelist = glob.glob("./trace/" + args.exp_name + "/sb_" + str(i - 1) + "_ids_*")
-    adjs_filelist = glob.glob("./trace/" + args.exp_name + "/sb_" + str(i - 1) + "_adjs_*")
-    cache_filelist = glob.glob("./trace/" + args.exp_name + "/sb_" + str(i - 1) + "_update_*")
+    n_id_filelist = glob.glob(
+        "./trace/" + args.exp_name + "/sb_" + str(i - 1) + "_ids_*"
+    )
+    adjs_filelist = glob.glob(
+        "./trace/" + args.exp_name + "/sb_" + str(i - 1) + "_adjs_*"
+    )
+    cache_filelist = glob.glob(
+        "./trace/" + args.exp_name + "/sb_" + str(i - 1) + "_update_*"
+    )
 
     for n_id_file in n_id_filelist:
         try:
@@ -253,11 +320,33 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode="train"):
 
     if last:
         if mode == "train":
-            num_iter = int((dataset.shuffled_train_idx.numel() % (args.sb_size * args.batch_size) + args.batch_size - 1) / args.batch_size)
+            num_iter = int(
+                (
+                    dataset.shuffled_train_idx.numel()
+                    % (args.sb_size * args.batch_size)
+                    + args.batch_size
+                    - 1
+                )
+                / args.batch_size
+            )
         elif mode == "valid":
-            num_iter = int((dataset.val_idx.numel() % (args.sb_size * args.batch_size) + args.batch_size - 1) / args.batch_size)
+            num_iter = int(
+                (
+                    dataset.val_idx.numel() % (args.sb_size * args.batch_size)
+                    + args.batch_size
+                    - 1
+                )
+                / args.batch_size
+            )
         elif mode == "test":
-            num_iter = int((dataset.test_idx.numel() % (args.sb_size * args.batch_size) + args.batch_size - 1) / args.batch_size)
+            num_iter = int(
+                (
+                    dataset.test_idx.numel() % (args.sb_size * args.batch_size)
+                    + args.batch_size
+                    - 1
+                )
+                / args.batch_size
+            )
     else:
         num_iter = args.sb_size
 
@@ -266,7 +355,17 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode="train"):
     loader = list()
     for t in range(args.trace_load_num_threads):
         q.append(Queue(maxsize=2))
-        loader.append(threading.Thread(target=trace_load, args=(q[t], list(range(t, num_iter, args.trace_load_num_threads)), i - 1), daemon=True))
+        loader.append(
+            threading.Thread(
+                target=trace_load,
+                args=(
+                    q[t],
+                    list(range(t, num_iter, args.trace_load_num_threads)),
+                    i - 1,
+                ),
+                daemon=True,
+            )
+        )
         loader[t].start()
 
     n_id_q = Queue(maxsize=2)
@@ -339,7 +438,9 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode="train"):
                 out_indices_q.put(out_indices)
 
             # Gather
-            gather_loader = threading.Thread(target=gather, args=(gather_q, n_id, cache, batch_size), daemon=True)
+            gather_loader = threading.Thread(
+                target=gather, args=(gather_q, n_id, cache, batch_size), daemon=True
+            )
             gather_loader.start()
 
         # Transfer
@@ -398,7 +499,10 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode="train"):
         f"Free time: {free_time:.3f} s"
     )
 
-    print(f"Feature Transfer size: {input_feat_size}\t" f"Input Node num: {input_node_num}")
+    print(
+        f"Feature Transfer size: {input_feat_size}\t"
+        f"Input Node num: {input_node_num}"
+    )
 
     return total_loss, total_correct, drop_cache_time
 
@@ -407,13 +511,18 @@ def train(epoch):
     model.train()
 
     dataset.make_new_shuffled_train_idx()
-    num_iter = int((dataset.shuffled_train_idx.numel() + args.batch_size - 1) / args.batch_size)
+    num_iter = int(
+        (dataset.shuffled_train_idx.numel() + args.batch_size - 1) / args.batch_size
+    )
 
     pbar = tqdm(total=dataset.train_idx.numel(), position=0, leave=True)
     pbar.set_description(f"Epoch {epoch:02d}")
 
     total_loss = total_correct = 0
-    num_sb = int((dataset.train_idx.numel() + args.batch_size * args.sb_size - 1) / (args.batch_size * args.sb_size))
+    num_sb = int(
+        (dataset.train_idx.numel() + args.batch_size * args.sb_size - 1)
+        / (args.batch_size * args.sb_size)
+    )
 
     sampling_time, train_time, drop_cache_time = 0, 0, 0
 
@@ -424,13 +533,17 @@ def train(epoch):
         drop_cache_time += time.time() - tic
 
         if args.verbose:
-            tqdm.write("Running {}th superbatch of total {} superbatches".format(i, num_sb))
+            tqdm.write(
+                "Running {}th superbatch of total {} superbatches".format(i, num_sb)
+            )
 
         # Superbatch sample
         if args.verbose:
             tqdm.write("Step 1: Superbatch Sample")
         tic = time.time()
-        cache, initial_cache_indices, duration = inspect(i, last=(i == num_sb), mode="train")
+        cache, initial_cache_indices, duration = inspect(
+            i, last=(i == num_sb), mode="train"
+        )
         torch.cuda.synchronize()
         sampling_time += time.time() - tic - duration
         drop_cache_time += duration
@@ -452,7 +565,9 @@ def train(epoch):
         if args.verbose:
             tqdm.write("Step 3: Main Loop")
         tic = time.time()
-        total_loss, total_correct, duration = execute(i, cache, pbar, total_loss, total_correct, last=(i == num_sb), mode="train")
+        total_loss, total_correct, duration = execute(
+            i, cache, pbar, total_loss, total_correct, last=(i == num_sb), mode="train"
+        )
         torch.cuda.synchronize()
         train_time += time.time() - tic - duration
         drop_cache_time += duration
