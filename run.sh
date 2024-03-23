@@ -30,9 +30,9 @@
 
 # python prepare_dataset.py --dataset ogbn-papers100M
 # python create_neigh_cache.py --neigh-cache-size 10e9 --dataset ogbn-papers100M
-sudo env PATH=$PATH python run_ginex.py --dataset ogbn-papers100M --neigh-cache-size 10e9 --feature-cache-size 10e9 --sb-size 10000 --num-epochs 1 --verbose --train-only --sample-mode
-sudo env PATH=$PATH python run_ginex.py --dataset ogbn-papers100M --neigh-cache-size 10e9 --feature-cache-size 10e9 --sb-size 10000 --num-epochs 3 --verbose --train-only
+sudo env PATH=$PATH python run_ginex.py --dataset ogbn-papers100M --num-hiddens 512 --dropout 0.2 --neigh-cache-size 10e9 --feature-cache-size 10e9 --sb-size 10000 --num-epochs 1 --verbose --train-only --sample-mode
+sudo env PATH=$PATH python run_ginex.py --dataset ogbn-papers100M --num-hiddens 512 --dropout 0.2 --neigh-cache-size 10e9 --feature-cache-size 10e9 --sb-size 10000 --num-epochs 3 --verbose --train-only
 
 # python create_neigh_cache.py --neigh-cache-size 5e9 --dataset ogbn-papers100M
-sudo env PATH=$PATH python run_ginex.py --dataset ogbn-papers100M --neigh-cache-size 5e9 --feature-cache-size 5e9 --sb-size 10000 --num-epochs 1 --verbose --train-only --sample-mode
-sudo env PATH=$PATH python run_ginex.py --dataset ogbn-papers100M --neigh-cache-size 5e9 --feature-cache-size 5e9 --sb-size 10000 --num-epochs 3 --verbose --train-only
+sudo env PATH=$PATH python run_ginex.py --dataset ogbn-papers100M --num-hiddens 512 --dropout 0.2 --neigh-cache-size 5e9 --feature-cache-size 5e9 --sb-size 10000 --num-epochs 1 --verbose --train-only --sample-mode
+sudo env PATH=$PATH python run_ginex.py --dataset ogbn-papers100M --num-hiddens 512 --dropout 0.2 --neigh-cache-size 5e9 --feature-cache-size 5e9 --sb-size 10000 --num-epochs 3 --verbose --train-only

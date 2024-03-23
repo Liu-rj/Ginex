@@ -23,6 +23,7 @@ argparser.add_argument('--num-epochs', type=int, default=10)
 argparser.add_argument('--batch-size', type=int, default=1024)
 argparser.add_argument('--num-workers', type=int, default=os.cpu_count()*2)
 argparser.add_argument('--num-hiddens', type=int, default=256)
+argparser.add_argument('--dropout', type=float, default=0.2)
 argparser.add_argument('--dataset', type=str, default='ogbn-papers100M')
 argparser.add_argument('--exp-name', type=str, default=None)
 argparser.add_argument('--sizes', type=str, default='10,10,10')
@@ -70,7 +71,7 @@ if args.verbose:
 # Define model
 device = torch.device('cuda:%d' % args.gpu)
 torch.cuda.set_device(device)
-model = SAGE(num_features, args.num_hiddens, num_classes, num_layers=len(sizes))
+model = SAGE(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
 model = model.to(device)
 
 
@@ -423,7 +424,7 @@ def inference(mode='test'):
 
 if __name__=='__main__':
     model.reset_parameters()
-    optimizer = torch.optim.Adam(model.parameters(), lr=0.003)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     epoch_time_list = []
     best_val_acc = final_test_acc = 0
