@@ -4,6 +4,7 @@ import numpy as np
 from ogb.nodeproppred import DglNodePropPredDataset
 from utils import IGB260MDGLDataset
 from ogb.lsc import MAG240MDataset
+from offgs.dataset import OffgsDataset
 import os
 
 
@@ -97,3 +98,14 @@ def load_dglgraph(root: str, feature_dim: int, num_classes):
         feats = torch.rand((g.num_nodes(), feature_dim), dtype=torch.float32)
         labels = torch.randint(0, num_classes, (g.num_nodes(),), dtype=torch.int64)
     return g, feats, labels, num_classes, splitted_idx
+
+
+def load_offgs_dataset(root: str):
+    dataset = OffgsDataset(root)
+    return (
+        dataset.graph,
+        dataset.features,
+        dataset.labels,
+        dataset.num_classes,
+        dataset.split_idx,
+    )

@@ -11,6 +11,9 @@ from load_graph import *
 # Parse arguments
 argparser = argparse.ArgumentParser()
 argparser.add_argument("--dataset", type=str, default="ogbn-papers100M")
+argparser.add_argument(
+    "--path", type=str, default="/nvme2n1/offgs_dataset/ogbn-papers100M-offgs"
+)
 args = argparser.parse_args()
 
 # # Download/load dataset
@@ -55,12 +58,7 @@ dataset_path = os.path.join(root, args.dataset + "-ginex")
 # else:
 #     raise NotImplementedError
 
-def load_ogbn_papers100M(root):    
-    g = torch.load(os.path.join(root, "graph.pth"))
-    splitted_idx = torch.load(os.path.join(root, "split_idx.pth"))
-    return g, None, None, None, splitted_idx
-
-dataset = load_ogbn_papers100M("/nvme2n1/offgs_dataset/ogbn-papers100M-offgs")
+dataset = load_offgs_dataset(args.path)
 
 g, features, labels, n_classes, splitted_idx = dataset
 print(g)
@@ -83,7 +81,9 @@ split_idx_path = os.path.join(dataset_path, "split_idx.pth")
 print("Saving indptr...")
 indptr_np = indptr.numpy()
 print(indptr_np.dtype)
-indptr_mmap = np.memmap(indptr_path, mode="w+", shape=indptr_np.shape, dtype=indptr_np.dtype)
+indptr_mmap = np.memmap(
+    indptr_path, mode="w+", shape=indptr_np.shape, dtype=indptr_np.dtype
+)
 indptr_mmap[:] = indptr[:]
 indptr_mmap.flush()
 print("Done!")
@@ -91,7 +91,9 @@ print("Done!")
 print("Saving indices...")
 indices_np = indices.numpy()
 print(indices_np.dtype)
-indices_mmap = np.memmap(indices_path, mode="w+", shape=indices_np.shape, dtype=indices_np.dtype)
+indices_mmap = np.memmap(
+    indices_path, mode="w+", shape=indices_np.shape, dtype=indices_np.dtype
+)
 indices_mmap[:] = indices[:]
 indices_mmap.flush()
 print("Done!")
