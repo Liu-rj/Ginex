@@ -60,7 +60,7 @@ dataset_path = os.path.join(root, args.dataset + "-ginex")
 
 dataset = load_offgs_dataset(args.path)
 
-g, features, labels, n_classes, splitted_idx = dataset
+g, features, labels, n_classes, splitted_idx, label_offset = dataset
 print(g)
 print(g.formats())
 g.create_formats_()
@@ -98,36 +98,36 @@ indices_mmap[:] = indices[:]
 indices_mmap.flush()
 print("Done!")
 
-# print("Saving features...")
-# features_mmap = np.memmap(
-#     features_path, mode="w+", shape=features.shape, dtype=np.float32
-# )
-# features_mmap[:] = features[:]
-# features_mmap.flush()
-# print("Done!")
+print("Saving features...")
+features_mmap = np.memmap(
+    features_path, mode="w+", shape=features.shape, dtype=np.float32
+)
+features_mmap[:] = features[:]
+features_mmap.flush()
+print("Done!")
 
-# print("Saving labels...")
-# labels = labels.type(torch.float32)
-# labels_mmap = np.memmap(labels_path, mode="w+", shape=labels.shape, dtype=np.float32)
-# labels_mmap[:] = labels[:]
-# labels_mmap.flush()
-# print("Done!")
+print("Saving labels...")
+labels = labels.type(torch.float32)
+labels_mmap = np.memmap(labels_path, mode="w+", shape=labels.shape, dtype=np.float32)
+labels_mmap[:] = labels[:]
+labels_mmap.flush()
+print("Done!")
 
-# print("Making conf file...")
-# mmap_config = dict()
-# mmap_config["num_nodes"] = int(g.num_nodes())
-# mmap_config["indptr_shape"] = tuple(indptr.shape)
-# mmap_config["indptr_dtype"] = str(indptr_mmap.dtype)
-# mmap_config["indices_shape"] = tuple(indices.shape)
-# mmap_config["indices_dtype"] = str(indices_mmap.dtype)
-# mmap_config["features_shape"] = tuple(features_mmap.shape)
-# mmap_config["features_dtype"] = str(features_mmap.dtype)
-# mmap_config["labels_shape"] = tuple(labels_mmap.shape)
-# mmap_config["labels_dtype"] = str(labels_mmap.dtype)
-# mmap_config["num_classes"] = int(n_classes)
-# mmap_config["label_offset"] = int(label_offset)
-# json.dump(mmap_config, open(conf_path, "w"))
-# print("Done!")
+print("Making conf file...")
+mmap_config = dict()
+mmap_config["num_nodes"] = int(g.num_nodes())
+mmap_config["indptr_shape"] = tuple(indptr.shape)
+mmap_config["indptr_dtype"] = str(indptr_mmap.dtype)
+mmap_config["indices_shape"] = tuple(indices.shape)
+mmap_config["indices_dtype"] = str(indices_mmap.dtype)
+mmap_config["features_shape"] = tuple(features_mmap.shape)
+mmap_config["features_dtype"] = str(features_mmap.dtype)
+mmap_config["labels_shape"] = tuple(labels_mmap.shape)
+mmap_config["labels_dtype"] = str(labels_mmap.dtype)
+mmap_config["num_classes"] = int(n_classes)
+mmap_config["label_offset"] = int(label_offset)
+json.dump(mmap_config, open(conf_path, "w"))
+print("Done!")
 
 print("Saving split index...")
 torch.save(splitted_idx, split_idx_path)

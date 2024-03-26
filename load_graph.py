@@ -108,4 +108,5 @@ def load_offgs_dataset(root: str):
         dataset.labels,
         dataset.num_classes,
         dataset.split_idx,
+        dataset.conf["label_offset"]
     )
