@@ -132,15 +132,15 @@ class FeatureCache:
         iterptr = torch.cat([torch.tensor([0,0], device='cuda'), cumsum[:-1]]); del(cumsum)
         frq_sum = frq.sum(); del(frq)
 
-        iters = torch.zeros(frq_sum+1, dtype=torch.int16, device='cuda')
+        iters = torch.zeros(frq_sum+1, dtype=torch.int16)
         iters[-1] = self.effective_sb_size
 
         for i, n_id in enumerate(n_id_list):
             n_id_cuda = n_id.cuda()
             tmp = iterptr[n_id_cuda+1]
-            iters[tmp] = i; del(tmp)
+            iters[tmp.cpu()] = i; del(tmp)
             iterptr[n_id_cuda+1] += 1; del(n_id_cuda)
-        iters[iterptr[1:]] |= msb
+        iters[iterptr[1:].cpu()] |= msb.cpu()
         iterptr = iterptr[:-1]
         iterptr[0] = 0
 
@@ -203,7 +203,7 @@ class FeatureCache:
             
             # Update iterptr
             iterptr[n_id_cuda] += 1
-            last_access = n_id_cuda[(iters[iterptr[n_id_cuda]] < 0)]
+            last_access = n_id_cuda[(iters[iterptr[n_id_cuda].cpu()] < 0)]
             iterptr[last_access] = iters.numel()-1; del(last_access)
 
             # Get candidates
@@ -212,7 +212,7 @@ class FeatureCache:
             candidates = (cache_table > 0).nonzero().squeeze(); del(n_id_cuda)
 
             # Get next access iterations of candidates
-            next_access_iters = iters[iterptr[candidates]]
+            next_access_iters = iters[iterptr[candidates].cpu()].cuda()
             next_access_iters.bitwise_and_(~msb)
             
             # Find num_entries elements in candidates with the smallest next access

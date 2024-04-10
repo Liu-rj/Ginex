@@ -9,6 +9,8 @@ from tqdm import tqdm
 import threading
 from queue import Queue
 from sage import SAGE
+from gat import GAT
+import csv
 
 from lib.data import *
 from lib.cache import *
@@ -20,6 +22,7 @@ from lib.neighbor_sampler import GinexNeighborSampler
 argparser = argparse.ArgumentParser()
 argparser.add_argument('--gpu', type=int, default=0)
 argparser.add_argument('--num-epochs', type=int, default=10)
+argparser.add_argument('--model', type=str, default='SAGE')
 argparser.add_argument('--batch-size', type=int, default=1024)
 argparser.add_argument('--num-workers', type=int, default=os.cpu_count()*2)
 argparser.add_argument('--num-hiddens', type=int, default=256)
@@ -35,6 +38,7 @@ argparser.add_argument('--ginex-num-threads', type=int, default=os.cpu_count()*8
 argparser.add_argument('--verbose', dest='verbose', default=False, action='store_true')
 argparser.add_argument('--train-only', dest='train_only', default=False, action='store_true')
 argparser.add_argument('--sample-mode', dest='sample_mode', default=False, action='store_true')
+argparser.add_argument("--log", type=str, default="logs/train_multi_thread.csv")
 args = argparser.parse_args()
 print(args)
 args.neigh_cache_size = int(args.neigh_cache_size)
@@ -51,7 +55,7 @@ if args.verbose:
 if args.exp_name is None:
     # now = datetime.now()
     # args.exp_name = now.strftime('%Y_%m_%d_%H_%M_%S')
-    args.exp_name = f"{args.dataset}-{args.feature_cache_size:g}-{args.sb_size}"
+    args.exp_name = f"{args.dataset}-{args.neigh_cache_size:g}-{args.feature_cache_size:g}-{args.sb_size}-{args.sizes}"
 os.makedirs(os.path.join('./trace', args.exp_name), exist_ok=True)
 sizes = [int(size) for size in args.sizes.split(',')]
 dataset = GinexDataset(path=dataset_path, split_idx_path=split_idx_path)
@@ -71,7 +75,12 @@ if args.verbose:
 # Define model
 device = torch.device('cuda:%d' % args.gpu)
 torch.cuda.set_device(device)
-model = SAGE(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
+if args.model == 'SAGE':
+    model = SAGE(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
+elif args.model == 'GAT':
+    model = GAT(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
+else:
+    raise ValueError('Invalid model name')
 model = model.to(device)
 
 
@@ -450,7 +459,27 @@ if __name__=='__main__':
                 best_val_acc = val_acc
                 final_test_acc = test_acc
     
-    print(f'Average Epoch Time: {np.mean(epoch_time_list[1:])} s')
+    avg_epoch_time = np.mean(epoch_time_list[1:]) if len(epoch_time_list) > 1 else epoch_time_list[0]
+    print(f'Average Epoch Time: {avg_epoch_time} s')
+    
+    with open(args.log, "a") as f:
+        writer = csv.writer(f, lineterminator="\n")
+        log_info = [
+            args.dataset,
+            args.sizes,
+            args.batch_size,
+            args.sb_size,
+            f"{args.neigh_cache_size:g}",
+            f"{args.feature_cache_size:g}",
+            args.model,
+            args.num_hiddens,
+            args.dropout,
+            args.num_epochs,
+            args.train_only,
+            args.sample_mode,
+            round(avg_epoch_time, 2),
+        ]
+        writer.writerow(log_info)
 
     if not args.train_only:
         tqdm.write('Final Test acc: {final_test_acc:.4f}')
