@@ -47,7 +47,7 @@ torch::Tensor gather_mmap(torch::Tensor features, torch::Tensor idx, int64_t fea
 }
 
 
-torch::Tensor gather_ginex(std::string feature_file, torch::Tensor idx, int64_t feature_dim, torch::Tensor cache, torch::Tensor cache_table){
+std::tuple<torch::Tensor, int64_t, int64_t> gather_ginex(std::string feature_file, torch::Tensor idx, int64_t feature_dim, torch::Tensor cache, torch::Tensor cache_table){
 
     // open file
     int feature_fd = open(feature_file.c_str(), O_RDONLY | O_DIRECT);
@@ -63,6 +63,8 @@ torch::Tensor gather_ginex(std::string feature_file, torch::Tensor idx, int64_t 
     auto idx_data = idx.data_ptr<int64_t>();
     auto cache_data = cache.data_ptr<float>();
     auto cache_table_data = cache_table.data_ptr<int32_t>();
+
+    std::atomic<int64_t> cache_miss(0), io_traffic(0);
 
     #pragma omp parallel for num_threads(atoi(getenv("GINEX_NUM_THREADS")))
     for (int64_t n = 0; n < num_idx; n++) {
@@ -89,6 +91,8 @@ torch::Tensor gather_ginex(std::string feature_file, torch::Tensor idx, int64_t 
             else {
                 read_size = ALIGNMENT;
             }
+            ++cache_miss;
+            io_traffic += read_size;
 
             if (pread(feature_fd, read_buffer+(ALIGNMENT*2*omp_get_thread_num())/sizeof(float), read_size, aligned_offset) == -1){
                 fprintf(stderr, "ERROR: %s\n", strerror(errno));
@@ -107,7 +111,7 @@ torch::Tensor gather_ginex(std::string feature_file, torch::Tensor idx, int64_t 
     free(read_buffer);
     close(feature_fd);
 
-    return result;
+    return {result, cache_miss, io_traffic};
 
 }
 
