@@ -1,0 +1,1 @@
+sudo env PATH=$PATH python run_ginex_single_thread.py --dataset ogbn-papers100M --num-hiddens 256 --dropout 0.2 --neigh-cache-size 5e9 --feature-cache-size 5e9 --sb-size 10000 --num-epochs 3 --verbose --train-only --model SAGE
