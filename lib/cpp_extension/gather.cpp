@@ -53,7 +53,6 @@ std::tuple<torch::Tensor, int64_t, int64_t> gather_ginex(std::string feature_fil
     int feature_fd = open(feature_file.c_str(), O_RDONLY | O_DIRECT);
 
     int64_t feature_size = feature_dim*sizeof(float);
-    int64_t read_size = feature_size;
 
     int64_t num_idx = idx.numel();
 
