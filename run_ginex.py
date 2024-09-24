@@ -10,6 +10,7 @@ import threading
 from queue import Queue
 from sage import SAGE
 from gat import GAT
+from gcn import GCN
 import csv
 
 from lib.data import *
@@ -79,6 +80,8 @@ if args.model == 'SAGE':
     model = SAGE(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
 elif args.model == 'GAT':
     model = GAT(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
+elif args.model == 'GCN':
+    model = GCN(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
 else:
     raise ValueError('Invalid model name')
 model = model.to(device)

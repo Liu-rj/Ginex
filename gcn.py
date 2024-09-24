@@ -1,21 +1,21 @@
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
-from torch_geometric.nn import SAGEConv
+from torch_geometric.nn import GraphConv
 
 
-class SAGE(torch.nn.Module):
+class GCN(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout):
-        super(SAGE, self).__init__()
+        super(GCN, self).__init__()
 
         self.num_layers = num_layers
         self.dropout = dropout
 
         self.convs = torch.nn.ModuleList()
-        self.convs.append(SAGEConv(in_channels, hidden_channels))
+        self.convs.append(GraphConv(in_channels, hidden_channels))
         for _ in range(num_layers - 2):
-            self.convs.append(SAGEConv(hidden_channels, hidden_channels))
-        self.convs.append(SAGEConv(hidden_channels, out_channels))
+            self.convs.append(GraphConv(hidden_channels, hidden_channels))
+        self.convs.append(GraphConv(hidden_channels, out_channels))
 
 
     def reset_parameters(self):
