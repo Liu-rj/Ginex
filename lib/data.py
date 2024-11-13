@@ -38,7 +38,7 @@ def get_mmap_dataset(path='../dataset/ogbn-papers100M-ginex', split_idx_path=Non
 
 
 class GinexDataset():
-    def __init__(self, path='../dataset/ogbn-papers100M-ginex', split_idx_path=None, score_path=None):
+    def __init__(self, path='../dataset/ogbn-papers100M-ginex', split_idx_path=None, score_path=None, train_downsample=None):
         self.indptr_path = os.path.join(path, 'indptr.dat')
         self.indices_path = os.path.join(path, 'indices.dat')
         self.features_path = os.path.join(path, 'features.dat')
@@ -47,7 +47,12 @@ class GinexDataset():
         self.conf = json.load(open(conf_path, 'r'))
 
         split_idx = torch.load(split_idx_path)
-        self.train_idx = split_idx['train']
+        if train_downsample is None:
+            self.train_idx = split_idx['train']
+        else:
+            downsample = ("000" + str(int(train_downsample * 100)))[-3:]
+            self.train_idx = torch.load(os.path.join(path, f'train_{downsample}.pth'))
+            print(f"Using downsampled train_idx: {downsample}, ratio: {self.train_idx.numel() / split_idx['train'].numel()}")
         self.val_idx = split_idx['valid']
         self.test_idx = split_idx['test']
 

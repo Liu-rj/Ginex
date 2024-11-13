@@ -8,9 +8,7 @@ import torch.nn.functional as F
 from tqdm import tqdm
 import threading
 from queue import Queue
-from sage import SAGE
-from gat import GAT
-from gcn import GCN
+from sage import SAGE_Shadow
 from torch_geometric.data import Data
 import csv
 
@@ -27,7 +25,7 @@ argparser.add_argument('--gpu', type=int, default=0)
 argparser.add_argument('--num-epochs', type=int, default=10)
 argparser.add_argument('--model', type=str, default='SAGE')
 argparser.add_argument('--batch-size', type=int, default=1024)
-argparser.add_argument('--num-workers', type=int, default=os.cpu_count()*2)
+argparser.add_argument('--num-workers', type=int, default=os.cpu_count())
 argparser.add_argument('--num-hiddens', type=int, default=256)
 argparser.add_argument('--dropout', type=float, default=0.2)
 argparser.add_argument('--dataset', type=str, default='ogbn-papers100M')
@@ -58,10 +56,10 @@ if args.verbose:
 if args.exp_name is None:
     # now = datetime.now()
     # args.exp_name = now.strftime('%Y_%m_%d_%H_%M_%S')
-    args.exp_name = f"{args.dataset}-{args.neigh_cache_size:g}-{args.feature_cache_size:g}-{args.sb_size}-{args.sizes}-shadow"
+    args.exp_name = f"{args.dataset}-{args.neigh_cache_size:g}-{args.feature_cache_size:g}-{args.sb_size}-{args.sizes}-{args.batch_size}-shadow"
 os.makedirs(os.path.join('./trace', args.exp_name), exist_ok=True)
 sizes = [int(size) for size in args.sizes.split(',')]
-dataset = GinexDataset(path=dataset_path, split_idx_path=split_idx_path)
+dataset = GinexDataset(path=dataset_path, split_idx_path=split_idx_path, train_downsample=0.1)
 num_nodes = dataset.num_nodes
 num_features = dataset.num_features
 features = dataset.features_path
@@ -69,7 +67,11 @@ num_classes = dataset.num_classes
 mmapped_features = dataset.get_mmapped_features()
 indptr, indices = dataset.get_adj_mat()
 coo_col = torch.repeat_interleave(torch.arange(num_nodes), indptr[1:] - indptr[:-1])
-data = Data(edge_index=torch.stack([indices, coo_col], dim=0))
+print(num_nodes, indices.numel())
+
+data = Data(edge_index=torch.stack([indices, coo_col], dim=0).to(torch.int64), num_nodes=num_nodes)
+data.csc_tensors = (indptr, indices)
+
 labels = dataset.get_labels()
 label_offset = dataset.conf['label_offset']
 print(f'Feature Dimension: {num_features}')
@@ -81,11 +83,7 @@ if args.verbose:
 device = torch.device('cuda:%d' % args.gpu)
 torch.cuda.set_device(device)
 if args.model == 'SAGE':
-    model = SAGE(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
-elif args.model == 'GAT':
-    model = GAT(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
-elif args.model == 'GCN':
-    model = GCN(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
+    model = SAGE_Shadow(num_features, args.num_hiddens, num_classes, num_layers=len(sizes), dropout=args.dropout)
 else:
     raise ValueError('Invalid model name')
 model = model.to(device)
@@ -103,9 +101,13 @@ def inspect(i, last, mode='train'):
         node_idx = dataset.val_idx
     elif mode == 'test':
         node_idx = dataset.test_idx
+    
+    load_cache, sample, changeset_compute = 0, 0, 0
 
     # No changeset precomputation when i == 0
     if i != 0:
+        torch.cuda.synchronize()
+        tic = time.time()
         effective_sb_size = int((node_idx.numel()%(args.sb_size*args.batch_size) + args.batch_size-1) / args.batch_size) if last else args.sb_size
         cache = FeatureCache(args.feature_cache_size, effective_sb_size, num_nodes, mmapped_features, num_features, args.exp_name, i - 1, args.verbose)
         # Pass 1 and 2 are executed before starting sb sample.
@@ -116,12 +118,16 @@ def inspect(i, last, mode='train'):
         # Only changset precomputation at the last superbatch in epoch
         if last:
             cache.pass_3(iterptr, iters, initial_cache_indices)
-            torch.cuda.empty_cache()
-            return cache, initial_cache_indices.cpu()
-        else:
-            torch.cuda.empty_cache()
+
+        torch.cuda.synchronize()
+        changeset_compute = time.time() - tic
+        
+        if last:
+            return cache, initial_cache_indices.cpu(), (load_cache, sample, changeset_compute)
 
     # Load neighbor cache
+    torch.cuda.synchronize()
+    tic = time.time()
     neighbor_cache_path = str(dataset_path) + '/nc' + '_size_' + f"{args.neigh_cache_size:g}" + '.dat'
     neighbor_cache_conf_path = str(dataset_path) + '/nc' + '_size_' + f"{args.neigh_cache_size:g}" + '_conf.json'
     neighbor_cache_numel = json.load(open(neighbor_cache_conf_path, 'r'))['shape'][0]
@@ -130,36 +136,40 @@ def inspect(i, last, mode='train'):
     neighbor_cachetable_numel = json.load(open(neighbor_cachetable_conf_path, 'r'))['shape'][0]
     neighbor_cache = load_int64(neighbor_cache_path, neighbor_cache_numel)
     neighbor_cachetable = load_int64(neighbor_cachetable_path, neighbor_cachetable_numel)
+    torch.cuda.synchronize()
+    load_cache = time.time() - tic
 
+    changeset_compute_in_sample = 0
+    torch.cuda.synchronize()
+    tic = time.time()
     start_idx = i * args.batch_size * args.sb_size 
     end_idx = min((i+1) * args.batch_size * args.sb_size, node_idx.numel())
-    # loader = GinexNeighborSampler(indptr, dataset.indices_path, args.exp_name, i, node_idx=node_idx[start_idx:end_idx],
-    #                                    sizes=sizes, num_nodes = num_nodes,
-    #                                    cache_data = neighbor_cache, address_table = neighbor_cachetable,
-    #                                    batch_size=args.batch_size,
-    #                                    shuffle=False, num_workers=args.num_workers, prefetch_factor=1<<20)
-    loader = ShaDowKHopSampler(data, depth=3, num_neighbors=10, node_idx=node_idx[start_idx:end_idx],
-                               batch_size=args.batch_size, num_workers=args.num_workers)
+    loader = ShaDowKHopSampler(data, indptr, dataset.indices_path, args.exp_name, i, node_idx=node_idx[start_idx:end_idx],
+                                       sizes=sizes, num_nodes = num_nodes,
+                                       cache_data = neighbor_cache, address_table = neighbor_cachetable,
+                                       batch_size=args.batch_size,
+                                       shuffle=False, num_workers=0)
 
     num_mini_batches = (node_idx[start_idx:end_idx].numel() + args.batch_size - 1) // args.batch_size
-    for step, (batch, n_id) in tqdm(enumerate(loader), total=num_mini_batches, ncols=100):
-        n_id_filename = os.path.join('./trace', args.exp_name, 'sb_' + str(i) + '_ids_' + str(step) + '.pth')
-        root_n_id_filename = os.path.join('./trace', args.exp_name, 'sb_' + str(i) + '_rnids_' + str(step) + '.pth')
-        adjs_filename = os.path.join('./trace', args.exp_name, 'sb_' + str(i) + '_adjs_' + str(step) + '.pth')
-
-        torch.save(n_id, n_id_filename)
-        torch.save(batch.root_n_id, root_n_id_filename)
-        torch.save(batch.edge_index, adjs_filename)
+    for step, _ in tqdm(enumerate(loader), total=num_mini_batches, ncols=100):
         if i != 0 and step == 0:
+            torch.cuda.synchronize()
+            tic = time.time()
             cache.pass_3(iterptr, iters, initial_cache_indices)
+            torch.cuda.synchronize()
+            changeset_compute_in_sample = time.time() - tic
 
     tensor_free(neighbor_cache)
     tensor_free(neighbor_cachetable)
 
+    torch.cuda.synchronize()
+    sample = time.time() - tic - changeset_compute_in_sample
+    changeset_compute += changeset_compute_in_sample
+
     if i != 0:
-        return cache, initial_cache_indices.cpu()
+        return cache, initial_cache_indices.cpu(), (load_cache, sample, changeset_compute)
     else:
-        return None, None
+        return None, None, (load_cache, sample, changeset_compute)
 
 
 def switch(cache, initial_cache_indices):
@@ -244,12 +254,11 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode='train'):
             q_value = q[idx % args.trace_load_num_threads].get()
             if q_value:
                 n_id, root_n_id, adjs, (in_indices, in_positions, out_indices) = q_value
-                batch_size = adjs[-1].size[1]
+                batch_size = root_n_id.numel()
                 n_id_q.put(n_id)
                 root_n_id_q.put(root_n_id)
                 adjs_q.put(adjs)
                 in_indices_q.put(in_indices)
-
                 in_positions_q.put(in_positions)
                 out_indices_q.put(out_indices)
 
@@ -276,6 +285,7 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode='train'):
             in_indices = in_indices_q.get()
             in_positions = in_positions_q.get()
             out_indices = out_indices_q.get()
+
             cache.update(batch_inputs, in_indices, in_positions, out_indices)
 
         if idx != num_iter-1:
@@ -283,7 +293,7 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode='train'):
             q_value = q[(idx + 1) % args.trace_load_num_threads].get()
             if q_value:
                 n_id, root_n_id, adjs, (in_indices, in_positions, out_indices) = q_value
-                batch_size = adjs[-1].size[1]
+                batch_size = root_n_id.numel()
                 n_id_q.put(n_id)
                 root_n_id_q.put(root_n_id)
                 adjs_q.put(adjs)
@@ -296,15 +306,16 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode='train'):
             gather_loader.start()
 
         # Transfer
+        root_n_id = root_n_id_q.get()
+        adjs_host = adjs_q.get()
         batch_inputs_cuda = batch_inputs.to(device)
         batch_labels_cuda = batch_labels.to(device)
-        adjs_host = adjs_q.get()
         edge_index = adjs_host.to(device)
         # adjs = [adj.to(device) for adj in adjs_host]
         total_num_infeats += batch_inputs.numel()
 
         # Forward
-        out = model(batch_inputs_cuda, edge_index)
+        out = model(batch_inputs_cuda, edge_index)[root_n_id]
         loss = F.nll_loss(out, batch_labels_cuda.long())
 
         # Backward
@@ -317,7 +328,6 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode='train'):
         total_loss += float(loss.item())
         total_correct += int(out.argmax(dim=-1).eq(batch_labels_cuda.long()).sum().item())
         n_id = n_id_q.get()
-        root_n_id = root_n_id_q.get()
         del(n_id)
         del(root_n_id)
         if idx == 0:
@@ -347,6 +357,7 @@ def train(epoch):
     total_loss = total_correct = 0
     num_sb = int((dataset.train_idx.numel()+args.batch_size*args.sb_size-1)/(args.batch_size*args.sb_size))
     
+    load_cache, sample, changeset_compute = 0, 0, 0
     total_cache_miss, total_io, total_load_time = 0, 0, 0
 
     for i in range(num_sb + 1):
@@ -357,7 +368,10 @@ def train(epoch):
             # Superbatch sample
             if args.verbose:
                 tqdm.write ('Step 1: Superbatch Sample')
-            cache, initial_cache_indices  = inspect(i, last=(i==num_sb), mode='train')
+            cache, initial_cache_indices, sample_decompose = inspect(i, last=(i==num_sb), mode='train')
+            load_cache += sample_decompose[0]
+            sample += sample_decompose[1]
+            changeset_compute += sample_decompose[2]
             torch.cuda.synchronize()
             if args.verbose:
                 tqdm.write ('Step 1: Done')
@@ -403,7 +417,7 @@ def train(epoch):
     loss = total_loss / num_iter
     approx_acc = total_correct / dataset.train_idx.numel()
 
-    return loss, approx_acc, total_num_infeats, (total_load_time, total_cache_miss, total_io)
+    return loss, approx_acc, total_num_infeats, (total_load_time, total_cache_miss, total_io), (load_cache, sample, changeset_compute)
 
 
 @torch.no_grad()
@@ -475,6 +489,7 @@ if __name__=='__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     
     epoch_info_recoder = [[] for i in range(3)]
+    epoch_sample_decompose = [[] for i in range(3)]
 
     epoch_time_list = []
     best_val_acc = final_test_acc = 0
@@ -484,15 +499,19 @@ if __name__=='__main__':
             tqdm.write('Running Epoch {}...'.format(epoch))
 
         start = time.time()
-        loss, acc, num_infeats, decompose_info = train(epoch)
+        loss, acc, num_infeats, decompose_info, sample_decompose = train(epoch)
         
         for i, record in enumerate(decompose_info):
             epoch_info_recoder[i].append(record)
+        
+        for i, record in enumerate(sample_decompose):
+            epoch_sample_decompose[i].append(record)
         
         end = time.time()
         tqdm.write(f'Epoch {epoch:02d}, Loss: {loss:.4f}, Approx. Train: {acc:.4f}, #Infeats: {num_infeats}')
         tqdm.write('Epoch time: {:.4f} s'.format(end - start))
         tqdm.write(f'Load time: {decompose_info[0]:.4f} s, Cache Miss: {decompose_info[1]}, IO Traffic: {decompose_info[2]}')
+        tqdm.write(f'Load Cache: {sample_decompose[0]:.4f} s, Sample: {sample_decompose[1]:.4f} s, Changeset Compute: {sample_decompose[2]:.4f} s')
         epoch_time_list.append(end - start)
 
         if epoch > 3 and not args.train_only:
@@ -517,7 +536,7 @@ if __name__=='__main__':
             args.sb_size,
             f"{args.neigh_cache_size:g}",
             f"{args.feature_cache_size:g}",
-            args.model,
+            f"ShadowGNN_{args.model}",
             args.num_hiddens,
             args.dropout,
             args.num_epochs,
@@ -527,6 +546,8 @@ if __name__=='__main__':
         ]
         for epoch_info in epoch_info_recoder:
             log_info.append(round(np.mean(epoch_info[1:]), 2))
+        for epoch_info in epoch_sample_decompose:
+            log_info.append(round(np.mean(epoch_info), 2))
         writer.writerow(log_info)
 
     if not args.train_only:

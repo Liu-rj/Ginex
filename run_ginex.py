@@ -100,8 +100,12 @@ def inspect(i, last, mode='train'):
     elif mode == 'test':
         node_idx = dataset.test_idx
 
+    load_cache, sample, changeset_compute = 0, 0, 0
+
     # No changeset precomputation when i == 0
     if i != 0:
+        torch.cuda.synchronize()
+        tic = time.time()
         effective_sb_size = int((node_idx.numel()%(args.sb_size*args.batch_size) + args.batch_size-1) / args.batch_size) if last else args.sb_size
         cache = FeatureCache(args.feature_cache_size, effective_sb_size, num_nodes, mmapped_features, num_features, args.exp_name, i - 1, args.verbose)
         # Pass 1 and 2 are executed before starting sb sample.
@@ -113,11 +117,16 @@ def inspect(i, last, mode='train'):
         if last:
             cache.pass_3(iterptr, iters, initial_cache_indices)
             torch.cuda.empty_cache()
-            return cache, initial_cache_indices.cpu()
-        else:
-            torch.cuda.empty_cache()
+        
+        torch.cuda.synchronize()
+        changeset_compute = time.time() - tic
+        
+        if last:
+            return cache, initial_cache_indices.cpu(), (load_cache, sample, changeset_compute)
 
     # Load neighbor cache
+    torch.cuda.synchronize()
+    tic = time.time()
     neighbor_cache_path = str(dataset_path) + '/nc' + '_size_' + f"{args.neigh_cache_size:g}" + '.dat'
     neighbor_cache_conf_path = str(dataset_path) + '/nc' + '_size_' + f"{args.neigh_cache_size:g}" + '_conf.json'
     neighbor_cache_numel = json.load(open(neighbor_cache_conf_path, 'r'))['shape'][0]
@@ -126,7 +135,12 @@ def inspect(i, last, mode='train'):
     neighbor_cachetable_numel = json.load(open(neighbor_cachetable_conf_path, 'r'))['shape'][0]
     neighbor_cache = load_int64(neighbor_cache_path, neighbor_cache_numel)
     neighbor_cachetable = load_int64(neighbor_cachetable_path, neighbor_cachetable_numel)
+    torch.cuda.synchronize()
+    load_cache = time.time() - tic
 
+    changeset_compute_in_sample = 0
+    torch.cuda.synchronize()
+    tic = time.time()
     start_idx = i * args.batch_size * args.sb_size 
     end_idx = min((i+1) * args.batch_size * args.sb_size, node_idx.numel())
     loader = GinexNeighborSampler(indptr, dataset.indices_path, args.exp_name, i, node_idx=node_idx[start_idx:end_idx],
@@ -138,15 +152,23 @@ def inspect(i, last, mode='train'):
     num_mini_batches = (node_idx[start_idx:end_idx].numel() + args.batch_size - 1) // args.batch_size
     for step, _ in tqdm(enumerate(loader), total=num_mini_batches, ncols=100):
         if i != 0 and step == 0:
+            torch.cuda.synchronize()
+            tic = time.time()
             cache.pass_3(iterptr, iters, initial_cache_indices)
+            torch.cuda.synchronize()
+            changeset_compute_in_sample = time.time() - tic
 
     tensor_free(neighbor_cache)
     tensor_free(neighbor_cachetable)
 
+    torch.cuda.synchronize()
+    sample = time.time() - tic - changeset_compute_in_sample
+    changeset_compute += changeset_compute_in_sample
+
     if i != 0:
-        return cache, initial_cache_indices.cpu()
+        return cache, initial_cache_indices.cpu(), (load_cache, sample, changeset_compute)
     else:
-        return None, None
+        return None, None, (load_cache, sample, changeset_compute)
 
 
 def switch(cache, initial_cache_indices):
@@ -327,6 +349,7 @@ def train(epoch):
     total_loss = total_correct = 0
     num_sb = int((dataset.train_idx.numel()+args.batch_size*args.sb_size-1)/(args.batch_size*args.sb_size))
     
+    load_cache, sample, changeset_compute = 0, 0, 0
     total_cache_miss, total_io, total_load_time = 0, 0, 0
 
     for i in range(num_sb + 1):
@@ -337,7 +360,10 @@ def train(epoch):
             # Superbatch sample
             if args.verbose:
                 tqdm.write ('Step 1: Superbatch Sample')
-            cache, initial_cache_indices  = inspect(i, last=(i==num_sb), mode='train')
+            cache, initial_cache_indices, sample_decompose = inspect(i, last=(i==num_sb), mode='train')
+            load_cache += sample_decompose[0]
+            sample += sample_decompose[1]
+            changeset_compute += sample_decompose[2]
             torch.cuda.synchronize()
             if args.verbose:
                 tqdm.write ('Step 1: Done')
@@ -383,7 +409,7 @@ def train(epoch):
     loss = total_loss / num_iter
     approx_acc = total_correct / dataset.train_idx.numel()
 
-    return loss, approx_acc, total_num_infeats, (total_load_time, total_cache_miss, total_io)
+    return loss, approx_acc, total_num_infeats, (total_load_time, total_cache_miss, total_io), (load_cache, sample, changeset_compute)
 
 
 @torch.no_grad()
@@ -455,6 +481,7 @@ if __name__=='__main__':
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     
     epoch_info_recoder = [[] for i in range(3)]
+    epoch_sample_decompose = [[] for i in range(3)]
 
     epoch_time_list = []
     best_val_acc = final_test_acc = 0
@@ -464,15 +491,19 @@ if __name__=='__main__':
             tqdm.write('Running Epoch {}...'.format(epoch))
 
         start = time.time()
-        loss, acc, num_infeats, decompose_info = train(epoch)
+        loss, acc, num_infeats, decompose_info, sample_decompose = train(epoch)
         
         for i, record in enumerate(decompose_info):
             epoch_info_recoder[i].append(record)
+        
+        for i, record in enumerate(sample_decompose):
+            epoch_sample_decompose[i].append(record)
         
         end = time.time()
         tqdm.write(f'Epoch {epoch:02d}, Loss: {loss:.4f}, Approx. Train: {acc:.4f}, #Infeats: {num_infeats}')
         tqdm.write('Epoch time: {:.4f} s'.format(end - start))
         tqdm.write(f'Load time: {decompose_info[0]:.4f} s, Cache Miss: {decompose_info[1]}, IO Traffic: {decompose_info[2]}')
+        tqdm.write(f'Load Cache: {sample_decompose[0]:.4f} s, Sample: {sample_decompose[1]:.4f} s, Changeset Compute: {sample_decompose[2]:.4f} s')
         epoch_time_list.append(end - start)
 
         if epoch > 3 and not args.train_only:
@@ -507,6 +538,8 @@ if __name__=='__main__':
         ]
         for epoch_info in epoch_info_recoder:
             log_info.append(round(np.mean(epoch_info[1:]), 2))
+        for epoch_info in epoch_sample_decompose:
+            log_info.append(round(np.mean(epoch_info), 2))
         writer.writerow(log_info)
 
     if not args.train_only:

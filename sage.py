@@ -70,7 +70,7 @@ class SAGE(torch.nn.Module):
 
 class SAGE_Shadow(torch.nn.Module):
     def __init__(self, in_channels, hidden_channels, out_channels, num_layers, dropout):
-        super(SAGE, self).__init__()
+        super(SAGE_Shadow, self).__init__()
 
         self.num_layers = num_layers
         self.dropout = dropout

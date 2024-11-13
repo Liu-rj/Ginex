@@ -65,6 +65,7 @@ num_classes = dataset.num_classes
 mmapped_features = dataset.get_mmapped_features()
 indptr, indices = dataset.get_adj_mat()
 labels = dataset.get_labels()
+label_offset = dataset.conf['label_offset']
 
 if args.verbose:
     tqdm.write("Done!")
@@ -270,7 +271,7 @@ def execute(i, cache, pbar, total_loss, total_correct, last, mode="train"):
         batch_inputs, cache_miss, io_traffic = gather_ginex(
             features, n_id, num_features, cache
         )
-        batch_labels = labels[n_id[:batch_size]]
+        batch_labels = labels[n_id[:batch_size] - label_offset]
         decompose_recorder[1] += time.time() - tic
         decompose_recorder[7] += cache_miss
         decompose_recorder[8] += io_traffic

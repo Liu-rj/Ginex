@@ -1,106 +1,142 @@
-import copy
-from typing import Optional
-
+from typing import List, Optional, Tuple, NamedTuple, Callable
+import os
 import torch
 from torch import Tensor
+import torch_sparse
+from torch_sparse import SparseTensor
+import torch.multiprocessing as mp
+from lib.cpp_extension.wrapper import sample
 
-from torch_geometric.data import Batch, Data
-from torch_geometric.typing import WITH_TORCH_SPARSE, SparseTensor
+
+def sample_adj_ginex(
+    rowptr,
+    col,
+    subset,
+    num_neighbors,
+    replace,
+    cache_data=None,
+    address_table=None,
+):
+    rowptr, col, n_id, indptr = sample.sample_adj_ginex(
+        rowptr, col, subset, cache_data, address_table, num_neighbors, replace
+    )
+    return n_id
 
 
 class ShaDowKHopSampler(torch.utils.data.DataLoader):
-    r"""The ShaDow :math:`k`-hop sampler from the `"Decoupling the Depth and
-    Scope of Graph Neural Networks" <https://arxiv.org/abs/2201.07858>`_ paper.
-    Given a graph in a :obj:`data` object, the sampler will create shallow,
-    localized subgraphs.
-    A deep GNN on this local graph then smooths the informative local signals.
-
-    .. note::
-
-        For an example of using :class:`ShaDowKHopSampler`, see
-        `examples/shadow.py <https://github.com/pyg-team/
-        pytorch_geometric/blob/master/examples/shadow.py>`_.
+    """
+    Neighbor sampler of Ginex. We modified NeighborSampler class of PyG.
 
     Args:
-        data (torch_geometric.data.Data): The graph data object.
-        depth (int): The depth/number of hops of the localized subgraph.
-        num_neighbors (int): The number of neighbors to sample for each node in
-            each hop.
-        node_idx (LongTensor or BoolTensor, optional): The nodes that should be
-            considered for creating mini-batches.
-            If set to :obj:`None`, all nodes will be
-            considered.
-        replace (bool, optional): If set to :obj:`True`, will sample neighbors
-            with replacement. (default: :obj:`False`)
+        indptr (Tensor): the indptr tensor.
+        indices (Tensor): the (memory-mapped) indices tensor.
+        exp_name (str): the name of the experiments used to designate the path of the
+            runtime trace files.
+        sb (int): the superbatch number.
+        sizes ([int]): The number of neighbors to sample for each node in each layer.
+            If set to sizes[l] = -1`, all neighbors are included in layer `l`.
+        node_idx (Tensor): The nodes that should be considered for creating mini-batches.
+        cache_data (Tensor): the data array of the neighbor cache.
+        address_table (Tensor): the address table of the neighbor cache.
+        num_nodes (int): the number of nodes in the graph.
+        transform (callable, optional): A function/transform that takes in a sampled
+            mini-batch and returns a transformed version. (default: None)
         **kwargs (optional): Additional arguments of
-            :class:`torch.utils.data.DataLoader`, such as :obj:`batch_size` or
-            :obj:`num_workers`.
+            `torch.utils.data.DataLoader`, such as `batch_size`,
+            `shuffle`, `drop_last`m `num_workers`.
     """
-    def __init__(self, data: Data, depth: int, num_neighbors: int,
-                 node_idx: Optional[Tensor] = None, replace: bool = False,
-                 **kwargs):
 
-        if not WITH_TORCH_SPARSE:
-            raise ImportError(
-                f"'{self.__class__.__name__}' requires 'torch-sparse'")
+    def __init__(
+        self,
+        data,
+        indptr,
+        indices,
+        exp_name,
+        sb,
+        sizes: List[int],
+        node_idx: Tensor,
+        cache_data=None,
+        address_table=None,
+        num_nodes: Optional[int] = None,
+        transform: Callable = None,
+        **kwargs
+    ):
 
-        self.data = copy.copy(data)
-        self.depth = depth
-        self.num_neighbors = num_neighbors
-        self.replace = replace
+        if "collate_fn" in kwargs:
+            del kwargs["collate_fn"]
+        if "dataset" in kwargs:
+            del kwargs["dataset"]
 
-        if data.edge_index is not None:
-            self.is_sparse_tensor = False
-            row, col = data.edge_index.cpu()
-            self.adj_t = SparseTensor(
-                row=row, col=col, value=torch.arange(col.size(0)),
-                sparse_sizes=(data.num_nodes, data.num_nodes)).t()
-        else:
-            self.is_sparse_tensor = True
-            self.adj_t = data.adj_t.cpu()
-
-        if node_idx is None:
-            node_idx = torch.arange(self.adj_t.sparse_size(0))
-        elif node_idx.dtype == torch.bool:
-            node_idx = node_idx.nonzero(as_tuple=False).view(-1)
+        self.data = data
+        self.indptr = indptr
+        self.indices = indices
+        self.exp_name = exp_name
+        self.sb = sb
         self.node_idx = node_idx
+        self.num_nodes = num_nodes
 
-        super().__init__(node_idx.tolist(), collate_fn=self.__collate__,
-                         **kwargs)
+        self.cache_data = cache_data
+        self.address_table = address_table
 
-    def __collate__(self, n_id):
-        n_id = torch.tensor(n_id)
+        self.sizes = sizes
+        self.transform = transform
 
-        rowptr, col, value = self.adj_t.csr()
-        out = torch.ops.torch_sparse.ego_k_hop_sample_adj(
-            rowptr, col, n_id, self.depth, self.num_neighbors, self.replace)
-        rowptr, col, n_id, e_id, ptr, root_n_id = out
+        if node_idx.dtype == torch.bool:
+            node_idx = node_idx.nonzero(as_tuple=False).view(-1)
 
-        adj_t = SparseTensor(rowptr=rowptr, col=col,
-                             value=value[e_id] if value is not None else None,
-                             sparse_sizes=(n_id.numel(), n_id.numel()),
-                             is_sorted=True, trust_data=True)
+        self.batch_count = torch.zeros(1, dtype=torch.int).share_memory_()
+        self.lock = mp.Lock()
 
-        batch = Batch(batch=torch.ops.torch_sparse.ptr2ind(ptr, n_id.numel()),
-                      ptr=ptr)
-        batch.root_n_id = root_n_id
+        super(ShaDowKHopSampler, self).__init__(
+            node_idx.view(-1).tolist(), collate_fn=self.sample, **kwargs
+        )
 
-        if self.is_sparse_tensor:
-            batch.adj_t = adj_t
-        else:
-            row, col, e_id = adj_t.t().coo()
-            batch.edge_index = torch.stack([row, col], dim=0)
+    def sample(self, batch):
+        if not isinstance(batch, Tensor):
+            batch = torch.tensor(batch)
+        root_n_id = batch
 
-        for k, v in self.data:
-            if k in ['edge_index', 'adj_t', 'num_nodes', 'batch', 'ptr']:
-                continue
-            if k == 'y' and v.size(0) == self.data.num_nodes:
-                batch[k] = v[n_id][root_n_id]
-            elif isinstance(v, Tensor) and v.size(0) == self.data.num_nodes:
-                batch[k] = v[n_id]
-            elif isinstance(v, Tensor) and v.size(0) == self.data.num_edges:
-                batch[k] = v[e_id]
-            else:
-                batch[k] = v
+        n_id = batch
+        for size in self.sizes:
+            n_id = sample_adj_ginex(
+                self.indptr,
+                self.indices,
+                n_id,
+                size,
+                False,
+                self.cache_data,
+                self.address_table,
+            )
 
-        return batch, n_id
+        subg = self.data.subgraph(n_id)
+        
+        # get the local position of root nodes in the subgraph
+        id_map = torch.zeros(self.num_nodes, dtype=torch.int64)
+        id_map[n_id] = torch.arange(n_id.size(0))
+        root_n_id = id_map[root_n_id]
+
+        self.lock.acquire()
+        root_n_id_filename = os.path.join(
+            "./trace",
+            self.exp_name,
+            "sb_" + str(self.sb) + "_rnids_" + str(self.batch_count.item()) + ".pth",
+        )
+        n_id_filename = os.path.join(
+            "./trace",
+            self.exp_name,
+            "sb_" + str(self.sb) + "_ids_" + str(self.batch_count.item()) + ".pth",
+        )
+        adjs_filename = os.path.join(
+            "./trace",
+            self.exp_name,
+            "sb_" + str(self.sb) + "_adjs_" + str(self.batch_count.item()) + ".pth",
+        )
+        self.batch_count += 1
+        self.lock.release()
+
+        torch.save(root_n_id, root_n_id_filename)
+        torch.save(n_id, n_id_filename)
+        torch.save(subg.edge_index, adjs_filename)
+
+    def __repr__(self):
+        return "{}(sizes={})".format(self.__class__.__name__, self.sizes)
